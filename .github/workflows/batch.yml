@@ -1,0 +1,65 @@
+name: Aether Batch Registration
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_start:
+        description: 'Start alias number (e.g. 2)'
+        required: true
+        default: '2'
+      batch_end:
+        description: 'End alias number (e.g. 5)'
+        required: true
+        default: '5'
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install httpx pydantic pydantic-settings capsolver beautifulsoup4 playwright nodriver
+
+      - name: Install Playwright browsers
+        run: python -m playwright install chromium
+
+      - name: Generate .env
+        run: |
+          echo GMAIL_EMAIL=${{ secrets.GMAIL_EMAIL }} >> .env
+          echo GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }} >> .env
+          echo ACCOUNT_PASSWORD=${{ secrets.ACCOUNT_PASSWORD }} >> .env
+          echo ACCOUNT_EMAIL_BASE=${{ secrets.ACCOUNT_EMAIL_BASE }} >> .env
+          echo CAPSOLVER_API_KEY=${{ secrets.CAPSOLVER_API_KEY }} >> .env
+          echo TURNSTILE_TOKEN=${{ secrets.TURNSTILE_TOKEN }} >> .env
+          echo TARGET_GROUPS=${{ secrets.TARGET_GROUPS }} >> .env
+          echo BATCH_START=${{ github.event.inputs.batch_start || '2' }} >> .env
+          echo BATCH_END=${{ github.event.inputs.batch_end || '5' }} >> .env
+
+      - name: Run registration
+        run: xvfb-run --auto-servernum python -m src.main
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-accounts
+          path: aether_accounts.json
+          retention-days: 7
+
+      - name: Print summary
+        if: always()
+        run: cat aether_accounts.json 2>/dev/null || echo 'No output file'
