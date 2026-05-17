@@ -38,7 +38,7 @@ def get_turnstile_token() -> Optional[str]:
     logger.info("Getting Turnstile token via Playwright browser...")
     from src.turnstile_solver import solve_turnstile
 
-    token = solve_turnstile(page_url=f"{settings.aether_base_url}/register", timeout=45)
+    token = solve_turnstile(timeout=90)
     if token:
         logger.info("Turnstile token obtained via Playwright")
         return token
