@@ -11,34 +11,40 @@ logger = logging.getLogger(__name__)
 
 
 def get_turnstile_token() -> Optional[str]:
-    """Get Turnstile token from manual input, env var, or CapSolver."""
+    """Get Turnstile token: env var -> CapSolver -> Playwright solver."""
     if settings.turnstile_token:
         logger.info("Using manual Turnstile token from env/config")
         return settings.turnstile_token
 
-    if not settings.capsolver_api_key:
-        logger.warning(
-            "No CAPSOLVER_API_KEY or TURNSTILE_TOKEN set.\n"
-            "Run `python src/get_turnstile.py` to get a manual token,\n"
-            "or set CAPSOLVER_API_KEY for automatic solving."
-        )
-        return None
+    capsolver_key = settings.capsolver_api_key
+    if capsolver_key:
+        logger.info("Getting Turnstile token via CapSolver...")
+        api = AetherAPI(settings.aether_api_base)
+        try:
+            pub = api.get_public_settings()
+            site_key = pub.get("turnstile_site_key", "")
+            if site_key:
+                token = solve_turnstile_capsolver(
+                    site_key=site_key,
+                    page_url=f"{settings.aether_base_url}/register",
+                    capsolver_key=capsolver_key,
+                )
+                if token:
+                    return token
+                logger.warning("CapSolver failed, trying Playwright...")
+        finally:
+            api.close()
 
-    logger.info("Getting Turnstile token via CapSolver...")
-    api = AetherAPI(settings.aether_api_base)
-    try:
-        pub = api.get_public_settings()
-        site_key = pub.get("turnstile_site_key", "")
-        if not site_key:
-            logger.error("No turnstile_site_key from settings")
-            return None
-        return solve_turnstile_capsolver(
-            site_key=site_key,
-            page_url=f"{settings.aether_base_url}/register",
-            capsolver_key=settings.capsolver_api_key,
-        )
-    finally:
-        api.close()
+    logger.info("Getting Turnstile token via Playwright browser...")
+    from src.turnstile_solver import solve_turnstile
+
+    token = solve_turnstile(page_url=f"{settings.aether_base_url}/register", timeout=45)
+    if token:
+        logger.info("Turnstile token obtained via Playwright")
+        return token
+
+    logger.error("All Turnstile methods failed")
+    return None
 
 
 def register_one(
