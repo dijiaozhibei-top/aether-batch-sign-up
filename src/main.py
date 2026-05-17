@@ -141,7 +141,7 @@ def create_api_keys_for_account(api: AetherAPI) -> List[dict]:
 def run_batch() -> List[dict]:
     """Batch register accounts and collect API keys."""
     token = get_turnstile_token()
-    if token is None and settings.capsolver_api_key:
+    if token is None:
         logger.error("Failed to get Turnstile token, aborting.")
         return []
 
