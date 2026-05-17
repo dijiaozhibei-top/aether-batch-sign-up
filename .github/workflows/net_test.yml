@@ -1,0 +1,12 @@
+name: Network Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -sI https://to-aether.com/register | head -20
+      - run: curl -sI https://challenges.cloudflare.com | head -20
+      - run: echo DNS check && nslookup to-aether.com 2>/dev/null || host to-aether.com 2>/dev/null || echo no dns tool
