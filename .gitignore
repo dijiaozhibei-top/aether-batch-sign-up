@@ -1,0 +1,5 @@
+.env
+__pycache__/
+*.pyc
+.ruff_cache/
+aether_accounts.json
