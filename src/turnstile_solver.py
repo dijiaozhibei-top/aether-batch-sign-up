@@ -130,54 +130,69 @@ def solve_turnstile(timeout: int = 60) -> Optional[str]:
             except Exception:
                 pass
 
-            # 3. Execute turnstile.render() on a custom container (strategy 3)
+            # 3. Use turnstile.execute() on existing cf-turnstile-response input
             if 3 not in strategies_tried and elapsed > 3:
                 strategies_tried.add(3)
-                logger.info("Strategy 3: Injecting Turnstile widget into page")
-                try:
-                    driver.execute_script("""
-                        if (typeof turnstile !== 'undefined' && !document.querySelector('.cf-turnstile')) {
-                            var div = document.createElement('div');
-                            div.className = 'cf-turnstile';
-                            div.id = 'ts-custom';
-                            document.body.appendChild(div);
-                            turnstile.render('#ts-custom', {
-                                sitekey: '0x4AAAAAACzc2OvvV_ueC81i',
-                                callback: function(token) {
-                                    window._turnstile_token = token;
-                                    document.title = 'TS_TOKEN_' + token;
-                                }
-                            });
-                        }
-                    """)
-                    logger.info("Turnstile render injected, waiting for callback...")
-                except Exception as e:
-                    logger.warning(f"Strategy 3 failed: {e}")
-
-            # 4. Try turnstile.execute() (strategy 4)
-            if 4 not in strategies_tried and elapsed > 8:
-                strategies_tried.add(4)
-                logger.info("Strategy 4: Calling turnstile.execute()")
+                logger.info("Strategy 3: turnstile.execute() on existing input")
                 try:
                     result = driver.execute_script("""
-                        try {
-                            // Try rendering Turnstile on body
-                            var inp = document.createElement('input');
+                        var inp = document.querySelector('input[name="cf-turnstile-response"]');
+                        if (!inp) {
+                            inp = document.createElement('input');
                             inp.type = 'hidden';
                             inp.name = 'cf-turnstile-response';
                             document.body.appendChild(inp);
-                            turnstile.render(inp, {
-                                sitekey: '0x4AAAAAACzc2OvvV_ueC81i',
-                                callback: function(token) {
-                                    inp.value = token;
-                                    window._turnstile_token = token;
-                                    document.title = 'TS_TOKEN_' + token;
-                                }
-                            });
-                            return 'rendered on input';
-                        } catch(e) {
-                            return 'error: ' + e.message;
                         }
+                        var wid = turnstile.render(inp, {
+                            sitekey: '0x4AAAAAACzc2OvvV_ueC81i',
+                            callback: function(token) {
+                                inp.value = token;
+                                window._turnstile_token = token;
+                                document.title = 'TS_TOKEN_' + token;
+                            },
+                            'error-callback': function(e) {
+                                document.title = 'TS_ERROR_' + JSON.stringify(e);
+                            }
+                        });
+                        return 'rendered widget: ' + wid;
+                    """)
+                    logger.info(f"Strategy 3 result: {result}")
+                    # Wait a moment then try execute
+                    time.sleep(3)
+                    result2 = driver.execute_script("""
+                        var inp = document.querySelector('input[name="cf-turnstile-response"]');
+                        var wid = inp ? inp.getAttribute('data-widget-id') : null;
+                        try {
+                            turnstile.execute(wid || inp);
+                            return 'execute called';
+                        } catch(e) {
+                            return 'execute error: ' + e.message;
+                        }
+                    """)
+                    logger.info(f"Strategy 3 execute: {result2}")
+                except Exception as e:
+                    logger.warning(f"Strategy 3 failed: {e}")
+
+            # 4. Alternative: create a fresh widget and execute immediately
+            if 4 not in strategies_tried and elapsed > 10:
+                strategies_tried.add(4)
+                logger.info("Strategy 4: fresh render + immediate execute")
+                try:
+                    result = driver.execute_script("""
+                        var div = document.createElement('div');
+                        div.id = 'ts-auto';
+                        document.body.appendChild(div);
+                        turnstile.execute('#ts-auto', {
+                            sitekey: '0x4AAAAAACzc2OvvV_ueC81i',
+                            callback: function(token) {
+                                document.title = 'TS_TOKEN_' + token;
+                                window._turnstile_token = token;
+                            },
+                            'error-callback': function(e) {
+                                document.title = 'TS_ERROR_' + JSON.stringify(e);
+                            }
+                        });
+                        return 'execute called on new container';
                     """)
                     logger.info(f"Strategy 4 result: {result}")
                 except Exception as e:
