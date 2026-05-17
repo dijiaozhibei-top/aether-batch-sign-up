@@ -30,20 +30,23 @@ jobs:
       - name: Install deps
         run: |
           pip install --upgrade pip
-          pip install httpx pydantic pydantic-settings capsolver beautifulsoup4 playwright
+          pip install httpx pydantic pydantic-settings capsolver beautifulsoup4
+          pip install playwright
           python -m playwright install chromium
 
       - name: Generate .env
         run: |
-          echo GMAIL_EMAIL=${{ secrets.GMAIL_EMAIL }} >> .env
-          echo GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }} >> .env
-          echo ACCOUNT_PASSWORD=${{ secrets.ACCOUNT_PASSWORD }} >> .env
-          echo ACCOUNT_EMAIL_BASE=${{ secrets.ACCOUNT_EMAIL_BASE }} >> .env
-          echo CAPSOLVER_API_KEY=${{ secrets.CAPSOLVER_API_KEY }} >> .env
-          echo TURNSTILE_TOKEN=${{ secrets.TURNSTILE_TOKEN }} >> .env
-          echo TARGET_GROUPS=${{ secrets.TARGET_GROUPS }} >> .env
-          echo BATCH_START=${{ github.event.inputs.batch_start || '2' }} >> .env
-          echo BATCH_END=${{ github.event.inputs.batch_end || '5' }} >> .env
+          cat > .env << 'ENVEOF'
+          GMAIL_EMAIL=${{ secrets.GMAIL_EMAIL }}
+          GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
+          ACCOUNT_PASSWORD=${{ secrets.ACCOUNT_PASSWORD }}
+          ACCOUNT_EMAIL_BASE=${{ secrets.ACCOUNT_EMAIL_BASE }}
+          CAPSOLVER_API_KEY=${{ secrets.CAPSOLVER_API_KEY }}
+          TURNSTILE_TOKEN=${{ secrets.TURNSTILE_TOKEN }}
+          TARGET_GROUPS=${{ secrets.TARGET_GROUPS }}
+          BATCH_START=${{ github.event.inputs.batch_start || '2' }}
+          BATCH_END=${{ github.event.inputs.batch_end || '5' }}
+          ENVEOF
 
       - name: Run registration
         run: python -m src.main
@@ -56,5 +59,18 @@ jobs:
           retention-days: 7
 
       - name: Print summary
-        if: always()
-        run: cat aether_accounts.json 2>/dev/null || echo 'No output file'
+        if: success() || failure()
+        run: |
+          if [ -f aether_accounts.json ]; then
+            echo "=== SUMMARY ==="
+            python -c "
+import json
+with open('aether_accounts.json') as f:
+    d = json.load(f)
+for a in d.get('accounts', []):
+    print(f\"  [{a['email']}]\")
+    for k in a.get('api_keys', []):
+        print(f\"    {k['group_name']}: {k['key_value']}\")
+    print()
+"
+          fi
