@@ -1,13 +1,44 @@
 import asyncio
 import logging
+import os
+import tempfile
 from typing import Optional
 
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
+TURNSTILE_SITE_KEY = "0x4AAAAAACzc2OvvV_ueC81i"
 
-async def _get_token_async(page_url: str, timeout: int = 45) -> Optional[str]:
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div id="turnstile-container"></div>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+<script>
+window.onload = function() {
+  turnstile.render('#turnstile-container', {
+    sitekey: '%s',
+    callback: function(token) {
+      document.title = 'TS_TOKEN_' + token;
+    }
+  });
+};
+</script>
+</body>
+</html>
+"""
+
+
+async def _get_token_async(timeout: int = 90) -> Optional[str]:
+    html = HTML_TEMPLATE % TURNSTILE_SITE_KEY
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False)
+    tmp.write(html)
+    tmp.close()
+    file_url = "file://" + tmp.name
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -15,6 +46,7 @@ async def _get_token_async(page_url: str, timeout: int = 45) -> Optional[str]:
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
             ],
         )
         context = await browser.new_context(
@@ -24,36 +56,36 @@ async def _get_token_async(page_url: str, timeout: int = 45) -> Optional[str]:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/125.0.0.0 Safari/537.36"
             ),
+            locale="en-US",
+            timezone_id="America/New_York",
         )
         page = await context.new_page()
 
         try:
-            await page.goto(page_url, wait_until="networkidle", timeout=30000)
-            logger.info("Page loaded, waiting for Turnstile to resolve...")
+            await page.goto(file_url, wait_until="domcontentloaded", timeout=15000)
+            logger.info("Local page loaded, waiting for Turnstile token...")
 
-            token = await page.wait_for_function(
-                """() => {
-                    const el = document.querySelector('input[name="cf-turnstile-response"]');
-                    if (el && el.value && el.value.length > 20) return el.value;
-                    const widget = document.querySelector('.cf-turnstile');
-                    if (widget && widget.getAttribute('data-token')) return widget.getAttribute('data-token');
-                    return null;
-                }""",
-                timeout=timeout * 1000,
-            )
-            result = await token.json_value()
-            if result:
-                logger.info(f"Turnstile token acquired ({len(result)} chars)")
-                return result
+            # Poll title changes — Turnstile callback sets document.title
+            for _ in range(timeout):
+                title = await page.title()
+                if title.startswith("TS_TOKEN_"):
+                    token = title[len("TS_TOKEN_") :]
+                    logger.info(f"Turnstile token acquired ({len(token)} chars)")
+                    return token
+                await asyncio.sleep(1)
 
-            logger.warning("Turnstile did not resolve automatically")
+            logger.warning("Turnstile did not resolve within timeout")
             return None
         except Exception as e:
             logger.warning(f"Turnstile solve failed: {e}")
             return None
         finally:
             await browser.close()
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
 
-def solve_turnstile(page_url: str, timeout: int = 45) -> Optional[str]:
-    return asyncio.run(_get_token_async(page_url, timeout))
+def solve_turnstile(timeout: int = 90) -> Optional[str]:
+    return asyncio.run(_get_token_async(timeout))
