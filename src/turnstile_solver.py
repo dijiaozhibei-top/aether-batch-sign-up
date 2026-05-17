@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import os
-import tempfile
 from typing import Optional
 
 from playwright.async_api import async_playwright
@@ -9,42 +7,13 @@ from playwright.async_api import async_playwright
 logger = logging.getLogger(__name__)
 
 TURNSTILE_SITE_KEY = "0x4AAAAAACzc2OvvV_ueC81i"
-
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body>
-<div id="turnstile-container"></div>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-<script>
-window.onload = function() {
-  turnstile.render('#turnstile-container', {
-    sitekey: '%s',
-    callback: function(token) {
-      document.title = 'TS_TOKEN_' + token;
-    },
-    'error-callback': function(e) {
-      document.title = 'TS_ERROR_' + JSON.stringify(e);
-    }
-  });
-};
-</script>
-</body>
-</html>
-"""
+REGISTER_URL = "https://to-aether.com/register"
 
 
 async def _get_token_async(timeout: int = 120) -> Optional[str]:
-    html = HTML_TEMPLATE % TURNSTILE_SITE_KEY
-
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False)
-    tmp.write(html)
-    tmp.close()
-    file_url = "file://" + tmp.name
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=True,
+            headless=False,
             args=[
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
@@ -65,8 +34,9 @@ async def _get_token_async(timeout: int = 120) -> Optional[str]:
         page = await context.new_page()
 
         try:
-            await page.goto(file_url, wait_until="domcontentloaded", timeout=15000)
-            logger.info("Local page loaded, waiting for Turnstile...")
+            logger.info(f"Navigating to {REGISTER_URL}...")
+            await page.goto(REGISTER_URL, wait_until="domcontentloaded", timeout=60000)
+            logger.info("Page loaded, waiting for Turnstile...")
 
             for i in range(timeout):
                 title = await page.title()
@@ -76,11 +46,17 @@ async def _get_token_async(timeout: int = 120) -> Optional[str]:
                     logger.info(f"Turnstile token acquired ({len(token)} chars)")
                     return token
 
-                if title.startswith("TS_ERROR_"):
-                    logger.warning(f"Turnstile error: {title}")
+                # Try to extract token via JavaScript
+                try:
+                    token = await page.evaluate("window._turnstile_token || ''")
+                    if token:
+                        logger.info(f"Turnstile token from JS ({len(token)} chars)")
+                        return token
+                except Exception:
+                    pass
 
-                # Check for managed challenge iframe (interactive checkbox)
-                if i == 5:
+                # Click Turnstile checkbox if visible
+                if i == 5 or i == 15:
                     try:
                         frame = page.frame_locator(
                             "iframe[src*='challenges.cloudflare.com']"
@@ -89,7 +65,6 @@ async def _get_token_async(timeout: int = 120) -> Optional[str]:
                         if await cb.is_visible(timeout=3000):
                             logger.info("Clicking Turnstile checkbox...")
                             await cb.click()
-                            # Move mouse after click for realism
                             await page.mouse.move(500, 500)
                     except Exception:
                         pass
@@ -103,10 +78,6 @@ async def _get_token_async(timeout: int = 120) -> Optional[str]:
             return None
         finally:
             await browser.close()
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
 
 
 def solve_turnstile(timeout: int = 120) -> Optional[str]:
