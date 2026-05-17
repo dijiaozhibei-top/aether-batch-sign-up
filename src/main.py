@@ -35,15 +35,18 @@ def get_turnstile_token() -> Optional[str]:
         finally:
             api.close()
 
-    logger.info("Getting Turnstile token via Playwright browser...")
+    logger.info("Getting Turnstile token via browser automation...")
     from src.turnstile_solver import solve_turnstile
 
-    token = solve_turnstile(timeout=90)
+    token = solve_turnstile(timeout=30)
     if token:
-        logger.info("Turnstile token obtained via Playwright")
+        logger.info("Turnstile token obtained via browser")
         return token
 
-    logger.error("All Turnstile methods failed")
+    logger.error(
+        "All Turnstile methods failed. "
+        "Set TURNSTILE_TOKEN secret with a fresh token from GET_TURNSTILE_TOKEN.md"
+    )
     return None
 
 
