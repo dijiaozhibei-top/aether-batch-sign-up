@@ -1,17 +1,15 @@
 import httpx
 import logging
 from typing import Optional, List, Dict, Any
-from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
 
 
 class AetherAPI:
-    def __init__(self, base_url: str = "https://to-aether.com"):
+    def __init__(self, base_url: str = "https://to-aether.com/api/v1"):
         self.base_url = base_url.rstrip("/")
-        self.api_base = urljoin(self.base_url + "/", "api/v1/")
         self._client = httpx.Client(
-            base_url=self.api_base,
+            base_url=self.base_url,
             timeout=60,
             headers={
                 "User-Agent": (
