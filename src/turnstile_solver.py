@@ -9,12 +9,11 @@ REGISTER_URL = "https://to-aether.com/register"
 SCREENSHOT_DIR = "/tmp/ts_debug"
 
 
-def solve_turnstile(timeout: int = 120) -> Optional[str]:
+def solve_turnstile(timeout: int = 60) -> Optional[str]:
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
     import undetected_chromedriver as uc
     from selenium.webdriver.common.by import By
-    from selenium.webdriver.common.keys import Keys
 
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
@@ -27,28 +26,74 @@ def solve_turnstile(timeout: int = 120) -> Optional[str]:
         driver = uc.Chrome(options=options, headless=False)
         logger.info("undetected-chromedriver started")
 
+        driver.set_page_load_timeout(30)
         driver.get(REGISTER_URL)
         logger.info(f"Page loaded, title: {driver.title}")
+        time.sleep(2)  # Let JS settle
 
         driver.save_screenshot(f"{SCREENSHOT_DIR}/01_loaded.png")
-        with open(f"{SCREENSHOT_DIR}/page.html", "w") as f:
-            f.write(driver.page_source[:100000])
+
+        # Debug: print Turnstile-related HTML
+        try:
+            ts_elements = driver.execute_script("""
+                // Find all Turnstile-related elements
+                var results = [];
+                // Check for cf-turnstile div
+                var ct = document.querySelector('.cf-turnstile');
+                if (ct) {
+                    results.push('cf-turnstile div: ' + ct.outerHTML.substring(0, 200));
+                    // Check for shadow root
+                    if (ct.shadowRoot) results.push('HAS SHADOW ROOT');
+                    if (ct.firstChild) results.push('firstChild tag: ' + ct.firstChild.tagName);
+                } else {
+                    results.push('NO .cf-turnstile div found');
+                }
+                // Check for turnstile in window
+                results.push('window.turnstile: ' + (typeof window.turnstile));
+                if (window.turnstile) {
+                    results.push('turnstile.render: ' + (typeof window.turnstile.render));
+                    results.push('turnstile.execute: ' + (typeof window.turnstile.execute));
+                    results.push('turnstile.getResponse: ' + (typeof window.turnstile.getResponse));
+                }
+                // Check for hidden inputs
+                var inputs = document.querySelectorAll('input[name=\"cf-turnstile-response\"]');
+                results.push('cf-turnstile-response inputs: ' + inputs.length);
+                // Check for iframes in page
+                var ifs = document.querySelectorAll('iframe');
+                results.push('iframes: ' + ifs.length);
+                for (var i = 0; i < ifs.length && i < 5; i++) {
+                    results.push('  iframe[' + i + '] src: ' + (ifs[i].src || '').substring(0, 120));
+                }
+                return results.join('\\n');
+            """)
+            for line in ts_elements.split("\n"):
+                logger.info(f"TS: {line}")
+        except Exception as e:
+            logger.warning(f"TS debug error: {e}")
+
+        try:
+            with open(f"{SCREENSHOT_DIR}/page.html", "w") as f:
+                f.write(driver.page_source[:100000])
+        except Exception:
+            pass
 
         deadline = time.time() + timeout
-        clicked = False
+        strategies_tried = set()
 
         while time.time() < deadline:
-            # 1. Try extracting token from page
+            elapsed = int(time.time() - (deadline - timeout))
+
+            # 1. Check for token
             try:
                 token = driver.execute_script("""
                     try {
                         var r = turnstile.getResponse();
                         if (r) return r;
                     } catch(e) {}
-                    var el = document.querySelector('.cf-turnstile input[name="cf-turnstile-response"]');
-                    if (el && el.value) return el.value;
-                    var inp = document.querySelector("[name='cf-turnstile-response']");
+                    var inp = document.querySelector('input[name="cf-turnstile-response"]');
                     if (inp && inp.value) return inp.value;
+                    var el = document.querySelector('.cf-turnstile');
+                    if (el && el._token) return el._token;
                     return '';
                 """)
                 if token:
@@ -57,10 +102,9 @@ def solve_turnstile(timeout: int = 120) -> Optional[str]:
             except Exception:
                 pass
 
-            # 2. Wait for iframe and click checkbox
+            # 2. Try Turnstile checkbox via iframe (every iteration)
             try:
-                iframes = driver.find_elements(By.TAG_NAME, "iframe")
-                for iframe in iframes:
+                for iframe in driver.find_elements(By.TAG_NAME, "iframe"):
                     src = iframe.get_attribute("src") or ""
                     if "challenges.cloudflare.com" in src and "turnstile" in src:
                         driver.switch_to.frame(iframe)
@@ -74,46 +118,105 @@ def solve_turnstile(timeout: int = 120) -> Optional[str]:
                             ]:
                                 els = driver.find_elements(By.CSS_SELECTOR, sel)
                                 for el in els:
-                                    if el.is_displayed() and el.is_enabled():
-                                        logger.info(f"Clicking iframe element: {sel}")
+                                    if el.is_displayed():
+                                        logger.info(f"Clicking iframe: {sel}")
                                         driver.execute_script(
                                             "arguments[0].click();", el
                                         )
-                                        time.sleep(1)
-                                        clicked = True
-                                        break
-                                if clicked:
-                                    break
+                                        time.sleep(0.5)
                         finally:
                             driver.switch_to.default_content()
                         break
             except Exception:
                 pass
 
-            # 3. If iframe interaction didn't work, try triggering Turnstile via form
-            if not clicked and time.time() > deadline - 60:
-                logger.info("Trying to trigger Turnstile via form interaction")
+            # 3. Execute turnstile.render() on a custom container (strategy 3)
+            if 3 not in strategies_tried and elapsed > 3:
+                strategies_tried.add(3)
+                logger.info("Strategy 3: Injecting Turnstile widget into page")
                 try:
-                    email_input = driver.find_element(
-                        By.CSS_SELECTOR, "input[type=email], input[name=email]"
-                    )
-                    if email_input and email_input.is_displayed():
-                        email_input.click()
-                        email_input.send_keys("test@example.com")
-                        time.sleep(0.5)
-                        email_input.clear()
-                        time.sleep(0.5)
-                        logger.info("Triggered email field interaction")
+                    driver.execute_script("""
+                        if (typeof turnstile !== 'undefined' && !document.querySelector('.cf-turnstile')) {
+                            var div = document.createElement('div');
+                            div.className = 'cf-turnstile';
+                            div.id = 'ts-custom';
+                            document.body.appendChild(div);
+                            turnstile.render('#ts-custom', {
+                                sitekey: '0x4AAAAAACzc2OvvV_ueC81i',
+                                callback: function(token) {
+                                    window._turnstile_token = token;
+                                    document.title = 'TS_TOKEN_' + token;
+                                }
+                            });
+                        }
+                    """)
+                    logger.info("Turnstile render injected, waiting for callback...")
+                except Exception as e:
+                    logger.warning(f"Strategy 3 failed: {e}")
 
-                    # Try submitting to trigger Turnstile
-                    submit_btn = driver.find_element(
-                        By.CSS_SELECTOR,
-                        "button[type=submit], button:has-text('Send'), button:has-text('Register')",
+            # 4. Try turnstile.execute() (strategy 4)
+            if 4 not in strategies_tried and elapsed > 8:
+                strategies_tried.add(4)
+                logger.info("Strategy 4: Calling turnstile.execute()")
+                try:
+                    result = driver.execute_script("""
+                        try {
+                            // Try rendering Turnstile on body
+                            var inp = document.createElement('input');
+                            inp.type = 'hidden';
+                            inp.name = 'cf-turnstile-response';
+                            document.body.appendChild(inp);
+                            turnstile.render(inp, {
+                                sitekey: '0x4AAAAAACzc2OvvV_ueC81i',
+                                callback: function(token) {
+                                    inp.value = token;
+                                    window._turnstile_token = token;
+                                    document.title = 'TS_TOKEN_' + token;
+                                }
+                            });
+                            return 'rendered on input';
+                        } catch(e) {
+                            return 'error: ' + e.message;
+                        }
+                    """)
+                    logger.info(f"Strategy 4 result: {result}")
+                except Exception as e:
+                    logger.warning(f"Strategy 4 failed: {e}")
+
+            # 5. Use the API / submit form to trigger Turnstile
+            if 5 not in strategies_tried and elapsed > 20:
+                strategies_tried.add(5)
+                logger.info("Strategy 5: Filling form and clicking submit")
+                try:
+                    email_inp = driver.find_element(
+                        By.CSS_SELECTOR, "input[type=email]"
                     )
-                    if submit_btn and submit_btn.is_displayed():
-                        logger.info("Clicking submit to trigger Turnstile")
-                        driver.execute_script("arguments[0].click();", submit_btn)
+                    if email_inp and email_inp.is_displayed():
+                        email_inp.clear()
+                        email_inp.send_keys("test@example.com")
+                        time.sleep(0.5)
+                        pwd_inp = driver.find_element(
+                            By.CSS_SELECTOR, "input[type=password]"
+                        )
+                        if pwd_inp and pwd_inp.is_displayed():
+                            pwd_inp.clear()
+                            pwd_inp.send_keys("TestPass123!")
+                        try:
+                            btn = driver.find_element(
+                                By.CSS_SELECTOR, "button[type=submit]"
+                            )
+                            driver.execute_script("arguments[0].click();", btn)
+                            logger.info("Clicked submit button")
+                        except Exception:
+                            pass
                         time.sleep(3)
+                except Exception as e:
+                    logger.warning(f"Strategy 5 failed: {e}")
+
+            # Screenshot at key moments
+            if elapsed in [5, 15, 30, 45]:
+                try:
+                    driver.save_screenshot(f"{SCREENSHOT_DIR}/state_{elapsed}s.png")
                 except Exception:
                     pass
 
