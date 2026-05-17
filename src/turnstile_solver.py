@@ -14,7 +14,7 @@ async def _get_token_async(timeout: int = 90) -> Optional[str]:
         logger.error("nodriver not installed. Run: pip install nodriver")
         return None
 
-    browser = await uc.start()
+    browser = await uc.start(no_sandbox=True)
     page = await browser.get(
         f"https://to-aether.com/register",
         new_window=True,
