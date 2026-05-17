@@ -142,7 +142,8 @@ def run_batch() -> List[dict]:
     """Batch register accounts and collect API keys."""
     token = get_turnstile_token()
     if token is None:
-        logger.warning("No Turnstile token, trying without (may fail)")
+        logger.error("Failed to get Turnstile token, aborting.")
+        return []
 
     accounts = []
 
