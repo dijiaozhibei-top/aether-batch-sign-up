@@ -14,24 +14,16 @@ def solve_turnstile(timeout: int = 120) -> Optional[str]:
 
     import undetected_chromedriver as uc
     from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, WebDriverException
 
     options = uc.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1280,800")
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
-    )
 
     driver = None
     try:
-        driver = uc.Chrome(options=options, headless=False, version_main=125)
+        driver = uc.Chrome(options=options, headless=False)
         logger.info("undetected-chromedriver started")
 
         driver.get(REGISTER_URL)
